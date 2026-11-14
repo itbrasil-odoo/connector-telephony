@@ -28,8 +28,8 @@ export class VoipAgent {
     get hasRtcSupport() {
         return Boolean(
             navigator.mediaDevices &&
-                navigator.mediaDevices.getUserMedia &&
-                window.MediaStream
+            navigator.mediaDevices.getUserMedia &&
+            window.MediaStream
         );
     }
     get agentConfig() {

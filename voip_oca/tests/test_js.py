@@ -9,9 +9,8 @@ from odoo.addons.web.tests.test_js import WebSuite
 class TestAutomationOCA(WebSuite):
     """Test Automation OCA"""
 
-    def get_hoot_filters(self):
-        self._test_params = [("+", "@voip_oca")]
-        return super().get_hoot_filters()
-
-    def test_voip_oca(self):
-        self.test_unit_desktop()
+    @odoo.tests.no_retry
+    def test_voip_oca(self, modules):
+        # WebSuite is a CrossModule test in 20.0: the selected modules are
+        # passed to the test method. Only run the hoot tests of this module.
+        self.test_unit_desktop(["voip_oca"])

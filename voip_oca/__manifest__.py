@@ -4,7 +4,7 @@
 {
     "name": "Voip OCA",
     "summary": "Provides the use of Voip",
-    "version": "19.0.1.0.2",
+    "version": "20.0.1.0.0",
     "author": "Dixmit, Odoo Community Association (OCA)",
     "website": "https://github.com/OCA/connector-telephony",
     "license": "AGPL-3",
@@ -13,7 +13,7 @@
     "depends": ["mail"],
     "maintainers": ["etobella"],
     "data": [
-        "security/ir.model.access.csv",
+        "security/ir.access.csv",
         "views/res_users.xml",
         "views/voip_call.xml",
         "views/voip_pbx.xml",

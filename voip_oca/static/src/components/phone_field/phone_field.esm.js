@@ -11,12 +11,11 @@ patch(PhoneField.prototype, {
         super.setup();
         this.agent = useService("voip_agent_oca");
     },
-    onPhoneClick(ev) {
+    onLinkClicked() {
         if (!this.agent.agent) {
-            return;
+            return super.onLinkClicked(...arguments);
         }
-        ev.preventDefault();
-        ev.stopPropagation();
         this.agent.call({number: this.props.record.data[this.props.name]});
+        return true;
     },
 });

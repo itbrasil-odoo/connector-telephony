@@ -49,10 +49,11 @@ class VoipOcaActivity(models.Model):
             res_record = self.env[activity.res_model].browse(activity.res_id)
             if res_record._filtered_access("read"):
                 allowed_activity_ids.append(activity.id)
-        return self.browse(allowed_activity_ids).activity_format()
+        store = Store()
+        store.add(self.browse(allowed_activity_ids), "_store_activity_fields")
+        return store.as_dict()
 
-    def _to_store_defaults(self, target):
-        return super()._to_store_defaults(target) + [
-            Store.One("main_partner_id", []),
-            "main_partner",
-        ]
+    def _store_activity_fields(self, res: Store.FieldList):  # pylint: disable=missing-return
+        super()._store_activity_fields(res)
+        res.one("main_partner_id", [])
+        res.attr("main_partner")

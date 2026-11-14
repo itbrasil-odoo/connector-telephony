@@ -7,25 +7,11 @@ from odoo import fields, models
 class ResUsers(models.Model):
     _inherit = "res.users"
 
-    voip_pbx_id = fields.Many2one("voip.pbx")
-    voip_username = fields.Char()
+    # ``user_writeable`` replaces the SELF_WRITEABLE_FIELDS list, which Odoo 20
+    # no longer reads.
+    voip_pbx_id = fields.Many2one("voip.pbx", user_writeable=True)
+    voip_username = fields.Char(user_writeable=True)
     voip_password = fields.Char()
-
-    @property
-    def SELF_READABLE_FIELDS(self):
-        return super().SELF_READABLE_FIELDS + [
-            "voip_pbx_id",
-            "voip_username",
-            "voip_password",
-        ]
-
-    @property
-    def SELF_WRITEABLE_FIELDS(self):
-        return super().SELF_WRITEABLE_FIELDS + [
-            "voip_pbx_id",
-            "voip_username",
-            "voip_password",
-        ]
 
     def _voip_get_info(self):
         return {

@@ -1,6 +1,6 @@
 /* @odoo-module */
 
-import {Record} from "@mail/core/common/record";
+import {Record} from "@mail/model/export";
 import {deserializeDateTime} from "@web/core/l10n/dates";
 import {durationStr} from "../../utils/utils.esm";
 
@@ -73,9 +73,9 @@ export class Call extends Record {
     }
     get iconTypeCall() {
         if (this.typeCall === "incoming") {
-            return "fa fa-arrow-down";
+            return "arrow_downward";
         }
-        return "fa fa-arrow-up";
+        return "arrow_upward";
     }
     /**
      * Duration of the call in seconds.

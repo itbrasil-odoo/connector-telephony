@@ -16,3 +16,8 @@ class VoipOcaPbx(models.Model):
         string="Environment",
         default="test",
     )
+    users_can_edit_credentials = fields.Boolean(
+        default=True,
+        help="Allow users to change their own PBX, username and password in "
+        "their preferences. When unchecked, only administrators can do it.",
+    )

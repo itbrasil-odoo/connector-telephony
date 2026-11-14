@@ -212,3 +212,110 @@ class TestVoipPassword(TransactionCase):
         copy = self.alice.copy({"login": "alice2"})
         self.assertFalse(copy.voip_password)
         self.assertFalse(copy.voip_username)
+
+
+class TestVoipCredentials(TransactionCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.pbx = cls.env["voip.pbx"].create({"name": "Default PBX"})
+        cls.locked_pbx = cls.env["voip.pbx"].create(
+            {"name": "Locked PBX", "users_can_edit_credentials": False}
+        )
+        cls.user = cls.env["res.users"].create(
+            {
+                "name": "Voip User",
+                "login": "voip_user",
+                "group_ids": [(6, 0, [cls.env.ref("base.group_user").id])],
+            }
+        )
+        cls.admin = cls.env["res.users"].create(
+            {
+                "name": "Voip Admin",
+                "login": "voip_admin",
+                "group_ids": [(6, 0, [cls.env.ref("base.group_system").id])],
+            }
+        )
+
+    def _lock_user(self):
+        self.user.write(
+            {
+                "voip_pbx_id": self.locked_pbx.id,
+                "voip_username": "1001",
+                "voip_password": "admin-secret",
+            }
+        )
+        return self.user.with_user(self.user)
+
+    def test_user_cannot_edit_own_credentials_when_disabled(self):
+        me = self._lock_user()
+        for vals in (
+            {"voip_password_input": "mine"},
+            {"voip_username": "2000"},
+            {"voip_pbx_id": self.pbx.id},
+        ):
+            with self.assertRaises(AccessError):
+                me.write(vals)
+        self.assertEqual(self.user.voip_password, "admin-secret")
+        self.assertEqual(self.user.voip_pbx_id, self.locked_pbx)
+        self.assertTrue(me.voip_credentials_locked)
+
+    def test_user_can_edit_own_credentials_by_default(self):
+        self.user.voip_pbx_id = self.pbx
+        me = self.user.with_user(self.user)
+        me.write({"voip_username": "1001", "voip_password_input": "mine"})
+        self.assertEqual(self.user.voip_password, "mine")
+        self.assertFalse(me.voip_credentials_locked)
+
+    def test_user_without_pbx_can_configure_themselves(self):
+        self.assertFalse(self.user.voip_pbx_id)
+        me = self.user.with_user(self.user)
+        self.assertFalse(me.voip_credentials_locked)
+        me.write(
+            {
+                "voip_pbx_id": self.pbx.id,
+                "voip_username": "1001",
+                "voip_password_input": "mine",
+            }
+        )
+        self.assertEqual(self.user.voip_password, "mine")
+
+    def test_user_cannot_move_to_locked_pbx(self):
+        self.user.voip_pbx_id = self.pbx
+        with self.assertRaises(AccessError):
+            self.user.with_user(self.user).write({"voip_pbx_id": self.locked_pbx.id})
+        self.assertEqual(self.user.voip_pbx_id, self.pbx)
+
+    def test_user_without_pbx_cannot_pick_locked_pbx(self):
+        with self.assertRaises(AccessError):
+            self.user.with_user(self.user).write({"voip_pbx_id": self.locked_pbx.id})
+
+    def test_non_admin_cannot_create_user_with_locked_pbx(self):
+        manager = self.env["res.users"].create(
+            {
+                "name": "Manager",
+                "login": "voip_manager",
+                "group_ids": [(6, 0, [self.env.ref("base.group_erp_manager").id])],
+            }
+        )
+        with self.assertRaises(AccessError):
+            self.env["res.users"].with_user(manager).create(
+                {
+                    "name": "New",
+                    "login": "voip_new",
+                    "voip_pbx_id": self.locked_pbx.id,
+                }
+            )
+
+    def test_admin_can_edit_and_read_with_lock(self):
+        self._lock_user()
+        admin_user = self.user.with_user(self.admin)
+        admin_user.write({"voip_username": "2000", "voip_password": "new-secret"})
+        self.assertEqual(admin_user.voip_password, "new-secret")
+        data = admin_user.read(["voip_password"])[0]
+        self.assertEqual(data["voip_password"], "new-secret")
+        self.assertFalse(admin_user.voip_credentials_locked)
+
+    def test_softphone_still_gets_password(self):
+        me = self._lock_user()
+        self.assertEqual(me._voip_get_info()["pbx_password"], "admin-secret")

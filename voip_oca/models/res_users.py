@@ -1,7 +1,15 @@
 # Copyright 2025 Dixmit
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
-from odoo import fields, models
+from odoo import api, fields, models
+from odoo.exceptions import AccessError
+
+VOIP_CREDENTIAL_FIELDS = {
+    "voip_pbx_id",
+    "voip_username",
+    "voip_password",
+    "voip_password_input",
+}
 
 
 class ResUsers(models.Model):
@@ -23,11 +31,62 @@ class ResUsers(models.Model):
         help="Write-only: it always reads empty.",
     )
 
+    voip_credentials_locked = fields.Boolean(
+        compute="_compute_voip_credentials_locked",
+        help="Technical field: the PBX of this user does not let them edit "
+        "the credentials and the current user is not an administrator.",
+    )
+
+    def _voip_is_admin(self):
+        return self.env.su or self.env.user.has_group("base.group_system")
+
+    @api.depends("voip_pbx_id.users_can_edit_credentials")
+    @api.depends_context("uid")
+    def _compute_voip_credentials_locked(self):
+        is_admin = self._voip_is_admin()
+        for user in self:
+            # ``_origin``: the lock follows the saved PBX, not the one being
+            # picked in a form.
+            pbx = user._origin.sudo().voip_pbx_id
+            user.voip_credentials_locked = bool(
+                not is_admin and pbx and not pbx.users_can_edit_credentials
+            )
+
+    def _check_voip_credentials_lock(self, new_pbx_id=None):
+        """Raise if a non administrator edits locked credentials.
+
+        A user is locked when it has a PBX that does not allow users to edit
+        credentials. Users without PBX are free to configure themselves.
+        """
+        if self._voip_is_admin():
+            return
+        pbx_model = self.env["voip.pbx"].sudo()
+        pbxs = self.sudo().voip_pbx_id | pbx_model.browse(new_pbx_id or [])
+        if pbxs.filtered(lambda p: not p.users_can_edit_credentials):
+            raise AccessError(
+                self.env._(
+                    "The PBX credentials can only be changed by an administrator."
+                )
+            )
+
+    def write(self, vals):
+        if VOIP_CREDENTIAL_FIELDS & vals.keys():
+            self._check_voip_credentials_lock(vals.get("voip_pbx_id"))
+        return super().write(vals)
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in vals_list:
+            if VOIP_CREDENTIAL_FIELDS & vals.keys():
+                self.browse()._check_voip_credentials_lock(vals.get("voip_pbx_id"))
+        return super().create(vals_list)
+
     def _compute_voip_password_input(self):
         for user in self:
             user.voip_password_input = False
 
     def _inverse_voip_password_input(self):
+        self._check_voip_credentials_lock()
         for user in self:
             if user.voip_password_input:
                 user.sudo().voip_password = user.voip_password_input

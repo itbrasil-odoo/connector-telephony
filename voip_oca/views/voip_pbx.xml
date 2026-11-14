@@ -13,6 +13,7 @@
                         <field name="domain" />
                         <field name="ws_server" />
                         <field name="mode" />
+                        <field name="users_can_edit_credentials" />
                     </group>
                 </sheet>
             </form>

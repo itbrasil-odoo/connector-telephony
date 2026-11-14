@@ -24,14 +24,26 @@
         <field name="arch" type="xml">
             <xpath expr="//notebook" position="inside">
                 <page name="voip" string="VOIP">
+                    <field name="voip_credentials_locked" invisible="1" />
                     <group>
-                        <field name="voip_pbx_id" widget="selection" string="PBX" />
-                        <field name="voip_username" string="Username" />
+                        <field
+                            name="voip_pbx_id"
+                            widget="selection"
+                            string="PBX"
+                            readonly="voip_credentials_locked"
+                        />
+                        <field
+                            name="voip_username"
+                            string="Username"
+                            readonly="voip_credentials_locked"
+                        />
                         <field
                             name="voip_password_input"
                             password="True"
                             string="Password"
                             placeholder="Type to set a new password"
+                            readonly="voip_credentials_locked"
+                            invisible="voip_credentials_locked"
                         />
                     </group>
                 </page>

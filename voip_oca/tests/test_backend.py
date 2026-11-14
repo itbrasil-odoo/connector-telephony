@@ -1,6 +1,7 @@
 # Copyright 2025 Dixmit
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 
+from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase
 
 
@@ -155,3 +156,59 @@ class TestVoipOca(TransactionCase):
         self.assertEqual(call.state, "rejected")
         self.assertTrue(call.end_date)
         self.assertFalse(call.start_date)
+
+
+class TestVoipPassword(TransactionCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.pbx = cls.env["voip.pbx"].create({"name": "PBX"})
+        group = cls.env.ref("base.group_user")
+        cls.alice, cls.bob = cls.env["res.users"].create(
+            [
+                {
+                    "name": name,
+                    "login": name.lower(),
+                    "group_ids": [(6, 0, [group.id])],
+                }
+                for name in ("Alice", "Bob")
+            ]
+        )
+        cls.alice.write(
+            {
+                "voip_pbx_id": cls.pbx.id,
+                "voip_username": "1001",
+                "voip_password": "SECRET1",
+            }
+        )
+
+    def test_other_user_cannot_read_password(self):
+        bob = self.bob
+        with self.assertRaises(AccessError):
+            self.alice.with_user(bob).read(["voip_password"])
+        with self.assertRaises(AccessError):
+            self.alice.with_user(bob).web_read({"voip_password": {}})
+        with self.assertRaises(AccessError):
+            self.env["res.users"].with_user(bob).search_read(
+                [("id", "=", self.alice.id)], ["voip_password"]
+            )
+        with self.assertRaises(AccessError):
+            self.env["res.users"].with_user(bob).formatted_read_group(
+                [], groupby=["voip_password"], aggregates=["__count"]
+            )
+        with self.assertRaises(AccessError):
+            self.env["res.users"].with_user(bob).search(
+                [("voip_password", "=like", "SEC%")]
+            )
+
+    def test_own_password_input_is_write_only(self):
+        alice = self.alice.with_user(self.alice)
+        alice.write({"voip_password_input": "NEW"})
+        self.assertEqual(self.alice.voip_password, "NEW")
+        self.assertFalse(alice.read(["voip_password_input"])[0]["voip_password_input"])
+        self.assertEqual(alice._voip_get_info()["pbx_password"], "NEW")
+
+    def test_copy_does_not_carry_credentials(self):
+        copy = self.alice.copy({"login": "alice2"})
+        self.assertFalse(copy.voip_password)
+        self.assertFalse(copy.voip_username)

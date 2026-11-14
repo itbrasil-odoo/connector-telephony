@@ -10,21 +10,44 @@ class ResUsers(models.Model):
     # ``user_writeable`` replaces the SELF_WRITEABLE_FIELDS list, which Odoo 20
     # no longer reads.
     voip_pbx_id = fields.Many2one("voip.pbx", user_writeable=True)
-    voip_username = fields.Char(user_writeable=True)
-    voip_password = fields.Char()
+    voip_username = fields.Char(user_writeable=True, copy=False)
+    # Only administrators can read the stored password, so colleagues cannot
+    # read, search, group or export it. Users reset their own password through
+    # ``voip_password_input``.
+    voip_password = fields.Char(groups="base.group_system", copy=False)
+    voip_password_input = fields.Char(
+        string="Password",
+        compute="_compute_voip_password_input",
+        inverse="_inverse_voip_password_input",
+        user_writeable=True,
+        help="Write-only: it always reads empty.",
+    )
+
+    def _compute_voip_password_input(self):
+        for user in self:
+            user.voip_password_input = False
+
+    def _inverse_voip_password_input(self):
+        for user in self:
+            if user.voip_password_input:
+                user.sudo().voip_password = user.voip_password_input
+        # never keep the written value in the cache: the field reads empty
+        self.invalidate_recordset(["voip_password_input"])
 
     def _voip_get_info(self):
+        # sudo: the softphone needs the password, which users cannot read.
+        user = self.sudo()
         return {
-            "pbx_id": self.voip_pbx_id.id,
-            "pbx": self.voip_pbx_id.name,
-            "pbx_domain": self.voip_pbx_id.domain,
-            "pbx_ws": self.voip_pbx_id.ws_server,
+            "pbx_id": user.voip_pbx_id.id,
+            "pbx": user.voip_pbx_id.name,
+            "pbx_domain": user.voip_pbx_id.domain,
+            "pbx_ws": user.voip_pbx_id.ws_server,
             "mode": (
-                self.voip_username and self.voip_password and self.voip_pbx_id.mode
+                user.voip_username and user.voip_password and user.voip_pbx_id.mode
             )
             or "test",
-            "pbx_username": self.voip_username,
-            "pbx_password": self.voip_password,
+            "pbx_username": user.voip_username,
+            "pbx_password": user.voip_password,
             "tones": {
                 "dialtone": "/voip_oca/static/audio/dialtone.mp3",
                 "calltone": "/voip_oca/static/audio/calltone.mp3",

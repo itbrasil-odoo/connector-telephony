@@ -27,7 +27,12 @@
                     <group>
                         <field name="voip_pbx_id" widget="selection" string="PBX" />
                         <field name="voip_username" string="Username" />
-                        <field name="voip_password" password="True" string="Password" />
+                        <field
+                            name="voip_password_input"
+                            password="True"
+                            string="Password"
+                            placeholder="Type to set a new password"
+                        />
                     </group>
                 </page>
             </xpath>

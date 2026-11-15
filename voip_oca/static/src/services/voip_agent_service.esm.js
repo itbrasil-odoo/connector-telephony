@@ -31,6 +31,7 @@ export class VoipAgent {
         this.isHolded = false;
         this.reconnectTimer = null;
         this._onPageHide = this.onPageHide.bind(this);
+        this._onPageShow = this.onPageShow.bind(this);
         this.store = services["mail.store"];
         this.connectAgent();
         return proxy(this);
@@ -115,7 +116,9 @@ export class VoipAgent {
                     onReject: this._onRegistererRejected.bind(this),
                 },
             });
+            // Same function references: adding them again never duplicates them
             window.addEventListener("pagehide", this._onPageHide);
+            window.addEventListener("pageshow", this._onPageShow);
             this.voip.status = "connected";
         } catch (error) {
             const message = this.redact(error.message);
@@ -157,15 +160,24 @@ export class VoipAgent {
         this._ignoreResult(() => this.registerer?.unregister());
         this._ignoreResult(() => this.agent?.stop());
     }
-    _ignoreResult(callback) {
+    /* The page came back from the back-forward cache: the agent was stopped */
+    onPageShow(event) {
+        if (event.persisted) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+            this.connectAgent();
+        }
+    }
+    _ignoreResult(action) {
         try {
-            Promise.resolve(callback()).catch(() => false);
+            Promise.resolve(action()).catch(() => false);
         } catch {
             // Nothing to do: the page is going away.
         }
     }
     stop() {
         window.removeEventListener("pagehide", this._onPageHide);
+        window.removeEventListener("pageshow", this._onPageShow);
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
     }

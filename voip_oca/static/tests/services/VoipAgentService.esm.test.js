@@ -131,3 +131,17 @@ test("does not log the password", async () => {
     expect(errors.join(" ")).not.toInclude(PASSWORD);
     expect(notifications.join(" ")).not.toInclude(PASSWORD);
 });
+
+test("re-registers on pageshow from bfcache", async () => {
+    const {calls} = setupAgent();
+    await animationFrame();
+    const registers = calls.register;
+    window.dispatchEvent(new Event("pagehide"));
+    await animationFrame();
+    window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: false}));
+    await animationFrame();
+    expect(calls.register).toBe(registers);
+    window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+    await animationFrame();
+    expect(calls.register).toBe(registers + 1);
+});

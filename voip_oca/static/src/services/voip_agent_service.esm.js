@@ -64,7 +64,8 @@ export class VoipAgent {
             logLevel: odoo.debug === "" ? "error" : "debug",
             transportOptions: {
                 server: this.voip.pbx_ws,
-                // Detects half-open WebSockets (4G, suspended laptops)
+                // Keep-alive helps TCP/NAT keep the socket open. SIP.js 0.21.2 does
+                // not close half-open sockets by itself (sip.js:11271-11287).
                 keepAliveInterval: 25,
             },
             uri: SIP.UserAgent.makeURI(
@@ -90,6 +91,10 @@ export class VoipAgent {
         this.startCalled = false;
         this.authRejected = false;
         this.attempt = 0;
+        clearTimeout(this.stableTimer);
+        this.stableTimer = null;
+        this.immediateUsed = false;
+        this.reported = false;
     }
     async connectAgent() {
         if (this.voip.mode !== "prod") {
@@ -203,7 +208,7 @@ export class VoipAgent {
             if (this._isStale(generation)) {
                 return;
             }
-            console.error(this.redact(error?.message));
+            this._report(this.redact(error?.message));
             this._scheduleRetry(generation);
         } finally {
             if (generation === this.generation) {
@@ -216,10 +221,24 @@ export class VoipAgent {
             return;
         }
         this.voip.status = "reconnecting";
-        this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
-            this.ensureRegistered(generation);
-        }, reconnectDelay(this.attempt++));
+        this.reconnectTimer = setTimeout(
+            () => {
+                this.reconnectTimer = null;
+                this.ensureRegistered(generation);
+            },
+            Math.max(reconnectDelay(this.attempt++), this._retryAfterMs())
+        );
+    }
+    /* Seconds asked by the PBX in a 500/503 "Retry-After" (sip.js:7584-7591) */
+    _retryAfterMs() {
+        return (this.registerer?.retryAfter || 0) * 1000;
+    }
+    /* Logs once per drop cycle, not on every attempt */
+    _report(message) {
+        if (!this.reported) {
+            this.reported = true;
+            console.error(message);
+        }
     }
     _onRegistered(generation) {
         if (this._isStale(generation)) {
@@ -227,8 +246,16 @@ export class VoipAgent {
         }
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
-        this.attempt = 0;
         this.voip.status = "connected";
+        // The attempts only start over when the registration holds for 30 s,
+        // so a server that accepts and drops the socket stays throttled.
+        clearTimeout(this.stableTimer);
+        this.stableTimer = setTimeout(() => {
+            this.stableTimer = null;
+            this.attempt = 0;
+            this.immediateUsed = false;
+            this.reported = false;
+        }, 30000);
     }
     /* Releases the registration when the page is closed (fire and forget) */
     onPageHide() {
@@ -311,10 +338,13 @@ export class VoipAgent {
     }
     _onDisconnect(error, generation = this.generation) {
         // Fired only when the transport leaves "Connected"
-        if (this._isStale(generation)) {
+        if (this._isStale(generation) || this.authRejected) {
             return;
         }
-        if (error) {
+        clearTimeout(this.stableTimer);
+        this.stableTimer = null;
+        if (error && !this.reported) {
+            this.reported = true;
             const message = this.redact(error.message);
             console.error(message);
             this.notification.add(
@@ -324,7 +354,13 @@ export class VoipAgent {
             );
         }
         this.voip.status = "reconnecting";
-        this.ensureRegistered(generation);
+        if (this.immediateUsed) {
+            this._scheduleRetry(generation);
+        } else {
+            // Only the first drop of a stable registration retries at once
+            this.immediateUsed = true;
+            this.ensureRegistered(generation);
+        }
     }
     _onSessionStateChange(newState) {
         switch (newState) {
@@ -546,7 +582,7 @@ export class VoipAgent {
             return;
         }
         // 408, 5xx (including the internal 503 of a dead transport), others
-        console.error(`REGISTER rejected with status ${status}`);
+        this._report(`REGISTER rejected with status ${status}`);
         this._scheduleRetry(generation);
     }
     _onRegistererStateChange(state, generation) {
@@ -559,6 +595,8 @@ export class VoipAgent {
         } else if (state === SIP.RegistererState.Unregistered) {
             // Lost registration (refused renewal, expiry, rejection). A 401/403
             // arrives right after this and cancels the retry.
+            clearTimeout(this.stableTimer);
+            this.stableTimer = null;
             this.voip.status = "reconnecting";
             this._scheduleRetry(generation);
         }

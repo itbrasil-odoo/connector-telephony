@@ -31,12 +31,19 @@ function setupAgent({
     failCreation = false,
     registerStatus = 200,
     holdRegister = false,
+    flap = false,
 } = {}) {
     allowTranslations();
     const calls = {register: 0, unregister: 0, stop: 0, reconnect: 0, start: 0};
     const agents = [];
     const registerers = [];
-    const net = {registerStatus, holdRegister, held: [], connects: 0};
+    const net = {
+        registerStatus,
+        holdRegister,
+        held: [],
+        connects: 0,
+        retryAfter: undefined,
+    };
     class RequestPendingError extends Error {}
     class FakeTransport {
         state = "Disconnected";
@@ -58,6 +65,10 @@ function setupAgent({
                 throw new Error("network down");
             }
             this.state = "Connected";
+            if (flap) {
+                // Accepts the WebSocket and closes it right after
+                setTimeout(() => this.drop(new Error("closed by server")), 10);
+            }
         }
         drop(error) {
             if (this.state === "Connected") {
@@ -138,6 +149,8 @@ function setupAgent({
             const respond = () => {
                 this.waiting = false;
                 let status = net.registerStatus;
+                // Set before the state change, like sip.js:7584-7591
+                this.retryAfter = net.retryAfter;
                 if (!this.agent.isConnected()) {
                     status = 503;
                 }
@@ -229,7 +242,9 @@ test("reconnect delay grows and caps at 30s", () => {
 });
 
 test("reconnect never gives up", async () => {
-    const {agent, agents, calls, notifications} = setupAgent({failReconnects: 10});
+    const {agent, agents, calls, notifications, errors} = setupAgent({
+        failReconnects: 10,
+    });
     await animationFrame();
     expect(agent.voip.status).toBe("connected");
     const registers = calls.register;
@@ -241,6 +256,9 @@ test("reconnect never gives up", async () => {
     }
     expect(calls.reconnect).toBe(10);
     expect(agent.voip.status).toBe("reconnecting");
+    // One report per drop cycle, not one per attempt
+    expect(errors.length).toBe(1);
+    expect(notifications.length).toBe(1);
     expect(notifications.some((text) => text.includes("reload"))).toBe(false);
     await advanceTime(reconnectDelay(9));
     await animationFrame();
@@ -387,12 +405,55 @@ test("RequestPendingError retries", async () => {
     await animationFrame();
     // The first REGISTER is still pending: register() rejects
     expect(calls.register).toBe(2);
+    // The pending REGISTER ends with 408 (Timer F): never a 200
     net.holdRegister = false;
+    net.registerStatus = 408;
     net.held.shift()();
     await animationFrame();
+    expect(agent.voip.status).toBe("reconnecting");
+    net.registerStatus = 200;
     await advanceTime(reconnectDelay(0));
     await animationFrame();
+    // "connected" comes from the NEW attempt
+    expect(calls.register).toBe(3);
     expect(agent.voip.status).toBe("connected");
+});
+
+test("server that accepts and drops the socket is throttled", async () => {
+    const {net} = setupAgent({flap: true});
+    for (let i = 0; i < 120; i++) {
+        await advanceTime(1000);
+        await animationFrame();
+    }
+    // 0, ~0, 1, 2, 4, 8, 16, 30, 30... seconds apart
+    expect(net.connects >= 6).toBe(true);
+    expect(net.connects <= 12).toBe(true);
+});
+
+test("honors Retry-After of a 503", async () => {
+    const {net, calls} = setupAgent({registerStatus: 503});
+    net.retryAfter = 120;
+    await animationFrame();
+    expect(calls.register).toBe(1);
+    await advanceTime(119000);
+    await animationFrame();
+    expect(calls.register).toBe(1);
+    await advanceTime(1500);
+    await animationFrame();
+    expect(calls.register).toBe(2);
+});
+
+test("a transport drop after 401 keeps the status red", async () => {
+    const {agent, agents, calls, notifications} = setupAgent({registerStatus: 401});
+    await animationFrame();
+    expect(agent.voip.status).toBe("disconnected");
+    agents[0].transport.drop(new Error("connection lost"));
+    await animationFrame();
+    await advanceTime(60000);
+    await animationFrame();
+    expect(agent.voip.status).toBe("disconnected");
+    expect(notifications.length).toBe(1);
+    expect(calls.reconnect).toBe(0);
 });
 
 test("two pageshow in a row leave a single active agent", async () => {

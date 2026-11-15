@@ -319,3 +319,18 @@ class TestVoipCredentials(TransactionCase):
     def test_softphone_still_gets_password(self):
         me = self._lock_user()
         self.assertEqual(me._voip_get_info()["pbx_password"], "admin-secret")
+
+
+class TestVoipFieldLabels(TransactionCase):
+    def test_voip_fields_have_distinct_labels(self):
+        fields_ = self.env["res.users"]._fields
+        labels = {}
+        for name, field in fields_.items():
+            labels.setdefault(field.string, []).append(name)
+        for name in fields_:
+            if name.startswith("voip_"):
+                self.assertEqual(
+                    labels[fields_[name].string],
+                    [name],
+                    f"{name} shares its label with another res.users field",
+                )

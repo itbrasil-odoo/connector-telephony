@@ -24,7 +24,7 @@ class ResUsers(models.Model):
     # ``voip_password_input``.
     voip_password = fields.Char(groups="base.group_system", copy=False)
     voip_password_input = fields.Char(
-        string="Password",
+        string="VoIP Password",
         compute="_compute_voip_password_input",
         inverse="_inverse_voip_password_input",
         user_writeable=True,

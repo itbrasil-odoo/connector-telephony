@@ -14,7 +14,8 @@
             &.o_voip_disconnected {
                 color: $o-danger !important;
             }
-            &.o_voip_connecting {
+            &.o_voip_connecting,
+            &.o_voip_reconnecting {
                 color: $o-warning !important;
             }
         }

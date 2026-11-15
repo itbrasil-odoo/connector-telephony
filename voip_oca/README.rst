@@ -114,7 +114,10 @@ Usage
 
 Automatically the system will login into the PBX server once we enter
 odoo with our user. If we are on a test environment, no login is made
-and the libraries of SIP are not loaded.
+and the libraries of SIP are not loaded. If the connection to the PBX
+drops, the widget shows "Reconnecting..." and keeps retrying (1s, 2s,
+4s... up to 30s between attempts) until the line is registered again.
+Closing the tab unregisters the line.
 
 Once we are logged, we can use the VOIP widget in order to call
 directly. In order to open all the selectors, we can press the softphone

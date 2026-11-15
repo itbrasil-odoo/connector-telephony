@@ -10,6 +10,14 @@ import {loadBundle} from "@web/core/assets";
 import {proxy} from "@odoo/owl";
 import {registry} from "@web/core/registry";
 
+/*
+    Delay (ms) to wait after the failed reconnection attempt number `attempt`
+    (starting at 0): 1s, 2s, 4s... capped at 30s.
+*/
+export function reconnectDelay(attempt) {
+    return Math.min(1000 * 2 ** Math.max(attempt, 0), 30000);
+}
+
 export class VoipAgent {
     constructor(env, services) {
         this.toneAudio = new window.Audio();
@@ -21,6 +29,8 @@ export class VoipAgent {
         this.session = false;
         this.isMuted = false;
         this.isHolded = false;
+        this.reconnectTimer = null;
+        this._onPageHide = this.onPageHide.bind(this);
         this.store = services["mail.store"];
         this.connectAgent();
         return proxy(this);
@@ -54,6 +64,15 @@ export class VoipAgent {
             userAgentString: `OCA SIP.js/${window.SIP.version}`,
         };
     }
+    /* Removes the password from any text that could be logged or shown */
+    redact(text) {
+        const password = this.voip.pbx_password;
+        const value = String(text ?? "");
+        return password ? value.split(password).join("***") : value;
+    }
+    async loadSipLibrary() {
+        await loadBundle("voip_oca.agent_assets");
+    }
     async connectAgent() {
         if (this.voip.mode !== "prod") {
             console.info("Voip agent is not available in non-production mode");
@@ -73,12 +92,13 @@ export class VoipAgent {
             We will only load the libraries if needed
         */
         try {
-            await loadBundle("voip_oca.agent_assets");
+            await this.loadSipLibrary();
         } catch (error) {
-            console.error(error);
+            const message = this.redact(error.message);
+            console.error(message);
             this.notification.add(
                 _t("Failed to load the SIP.js library:\n\n%(error)s", {
-                    error: error.message,
+                    error: message,
                 })
             );
             return;
@@ -95,15 +115,17 @@ export class VoipAgent {
                     onReject: this._onRegistererRejected.bind(this),
                 },
             });
+            window.addEventListener("pagehide", this._onPageHide);
             this.voip.status = "connected";
         } catch (error) {
-            console.error(error);
+            const message = this.redact(error.message);
+            console.error(message);
             this.voip.status = "disconnected";
             this.notification.add(
                 _t(
                     "An error occurred during the instantiation of the User Agent:\n\n%(error)s",
                     {
-                        error: error.message,
+                        error: message,
                     }
                 )
             );
@@ -111,29 +133,41 @@ export class VoipAgent {
         }
     }
     async reconnectAgent(attempt = 0) {
-        // TODO: Show the failure in the widget somehow....
-        if (attempt >= 5) {
-            this.notification.add(
-                _t("Failed to reconnect the User Agent. Please reload the page.")
-            );
-            this.voip.status = "disconnected";
-            return;
-        }
-        if (this.reconnectingAgent) {
+        // Never gives up: retries with a growing delay until the line is back.
+        if (this.reconnectingAgent || this.reconnectTimer) {
             return;
         }
         this.reconnectingAgent = true;
+        this.voip.status = "reconnecting";
         try {
             await this.agent.reconnect();
             this.registerer.register();
-
             this.voip.status = "connected";
         } catch {
-            // Reconnect immediately if the connection fails, then 5 seconds, then 25, 125, 625
-            setTimeout(() => this.reconnectAgent(attempt + 1), 5 ** attempt * 1000);
+            this.reconnectTimer = setTimeout(() => {
+                this.reconnectTimer = null;
+                this.reconnectAgent(attempt + 1);
+            }, reconnectDelay(attempt));
         } finally {
             this.reconnectingAgent = false;
         }
+    }
+    /* Releases the registration when the page is closed (fire and forget) */
+    onPageHide() {
+        this._ignoreResult(() => this.registerer?.unregister());
+        this._ignoreResult(() => this.agent?.stop());
+    }
+    _ignoreResult(callback) {
+        try {
+            Promise.resolve(callback()).catch(() => false);
+        } catch {
+            // Nothing to do: the page is going away.
+        }
+    }
+    stop() {
+        window.removeEventListener("pagehide", this._onPageHide);
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
     }
     playTone(tone) {
         this.toneAudio.currentTime = 0;
@@ -177,14 +211,15 @@ export class VoipAgent {
         if (!error) {
             return;
         }
-        console.error(error);
+        const message = this.redact(error.message);
+        console.error(message);
         this.notification.add(
             _t("An error occurred during the connection:\n\n%(error)s", {
-                error: error.message,
+                error: message,
             })
         );
 
-        this.voip.status = "connecting";
+        this.voip.status = "reconnecting";
         this.reconnectAgent();
     }
     _onSessionStateChange(newState) {

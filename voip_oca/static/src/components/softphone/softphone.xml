@@ -16,6 +16,10 @@
                         t-attf-class="oi oi-filled o_voip_status_icon ms-3 me-1 o_voip_#{this.voip.status}"
                         data-icon="circle"
                     />
+                    <span
+                        t-if="this.voip.status === 'reconnecting'"
+                        class="o_voip_status_text small me-1"
+                    >Reconnecting...</span>
                     <span class="oi oi-filled oi-lg mx-1" data-icon="tty" />
                     <span class="mx-1">VoIP</span>
                 </div>

@@ -472,6 +472,15 @@ and the libraries of SIP are not loaded. If the connection to the PBX
 drops, the widget shows “Reconnecting…” and keeps retrying (1s, 2s,
 4s… up to 30s between attempts) until the line is registered again.
 Closing the tab unregisters the line.</p>
+<p>The status indicator of the softphone shows the state of the line:</p>
+<ul class="simple">
+<li>Green: the extension is registered in the PBX.</li>
+<li>Yellow: connecting or reconnecting (a new attempt is made
+automatically).</li>
+<li>Red with a fixed warning: the PBX refused the extension or the
+password. The softphone does not try again: fix the configuration and
+reload the page.</li>
+</ul>
 <p>Once we are logged, we can use the VOIP widget in order to call
 directly. In order to open all the selectors, we can press the softphone
 button on the top bar…</p>
@@ -489,8 +498,8 @@ button on the top bar…</p>
 <p>Clicking the top bar of the widget again will make it reappear.</p>
 <p>We can make a call in 2 ways:</p>
 <ol class="arabic simple">
-<li>Clicking the partner’s number in the partner view, which appears in
-green. .. figure:: <a class="reference external" href="https://raw.githubusercontent.com/OCA/connector-telephony/20.0/voip_oca/static/description/partner.png">https://raw.githubusercontent.com/OCA/connector-telephony/20.0/voip_oca/static/description/partner.png</a></li>
+<li>Clicking the “Call” button next to the phone number in the partner
+form (the number itself is no longer a link).</li>
 <li>Opening the numpad located at the bottom left of the widget, entering
 the desired number, and clicking the call button located at the
 bottom right of the widget. .. figure:: <a class="reference external" href="https://raw.githubusercontent.com/OCA/connector-telephony/20.0/voip_oca/static/description/numpad.png">https://raw.githubusercontent.com/OCA/connector-telephony/20.0/voip_oca/static/description/numpad.png</a></li>

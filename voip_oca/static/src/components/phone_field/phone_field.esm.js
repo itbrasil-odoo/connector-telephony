@@ -15,7 +15,7 @@ patch(PhoneField.prototype, {
         if (!this.agent.agent) {
             return super.onLinkClicked(...arguments);
         }
-        this.agent.call({number: this.props.record.data[this.props.name]});
+        this.agent.call({number: this.dialNumber});
         return true;
     },
 });

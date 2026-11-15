@@ -4,6 +4,13 @@ If the connection to the PBX drops, the widget shows "Reconnecting..." and keeps
 retrying (1s, 2s, 4s... up to 30s between attempts) until the line is registered
 again. Closing the tab unregisters the line.
 
+The status indicator of the softphone shows the state of the line:
+
+- Green: the extension is registered in the PBX.
+- Yellow: connecting or reconnecting (a new attempt is made automatically).
+- Red with a fixed warning: the PBX refused the extension or the password. The
+  softphone does not try again: fix the configuration and reload the page.
+
 Once we are logged, we can use the VOIP widget in order to call directly.
 In order to open all the selectors, we can press the softphone button on the top bar...
 
@@ -21,8 +28,7 @@ Clicking the top bar of the widget again will make it reappear.
 
 We can make a call in 2 ways:
 
-1. Clicking the partner's number in the partner view, which appears in green.
-.. figure:: static/description/partner.png
+1. Clicking the "Call" button next to the phone number in the partner form (the number itself is no longer a link).
 
 2. Opening the numpad located at the bottom left of the widget, entering the desired number,
 and clicking the call button located at the bottom right of the widget.

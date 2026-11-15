@@ -1,5 +1,5 @@
 /*
-    Copyright 2025 Dixmit
+    Copyright 2026 IT Brasil
     License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
 */
 import {VoipAgent, reconnectDelay} from "@voip_oca/services/voip_agent_service.esm";
@@ -239,6 +239,17 @@ test("reconnect delay grows and caps at 30s", () => {
     expect(reconnectDelay(1)).toBe(2000);
     expect(reconnectDelay(5)).toBe(30000);
     expect(reconnectDelay(20)).toBe(30000);
+});
+
+test("honors agentConfig overrides from other modules", async () => {
+    patchWithCleanup(VoipAgent.prototype, {
+        get agentConfig() {
+            return {...super.agentConfig, extraOption: "turn"};
+        },
+    });
+    const {agents} = setupAgent();
+    await animationFrame();
+    expect(agents[0].options.extraOption).toBe("turn");
 });
 
 test("reconnect never gives up", async () => {

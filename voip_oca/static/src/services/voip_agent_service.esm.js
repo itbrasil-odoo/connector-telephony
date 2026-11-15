@@ -47,9 +47,9 @@ export class VoipAgent {
         );
     }
     get agentConfig() {
-        return this.buildAgentConfig(this.generation);
-    }
-    buildAgentConfig(generation) {
+        // Callers create the agent right after checking the generation, so
+        // the current one is the one this configuration belongs to.
+        const generation = this.generation;
         return {
             authorizationPassword: this.voip.pbx_password,
             authorizationUsername: this.voip.pbx_username,
@@ -137,7 +137,7 @@ export class VoipAgent {
         }
         let agent = null;
         try {
-            agent = new SIP.UserAgent(this.buildAgentConfig(generation));
+            agent = new SIP.UserAgent(this.agentConfig);
         } catch (error) {
             const message = this.redact(error.message);
             console.error(message);

@@ -5,7 +5,8 @@
     &.o_voip_disconnected {
         background-color: $o-danger !important;
     }
-    &.o_voip_connecting {
+    &.o_voip_connecting,
+    &.o_voip_reconnecting {
         background-color: $o-warning !important;
     }
 }

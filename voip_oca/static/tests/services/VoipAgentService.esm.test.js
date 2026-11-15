@@ -8,9 +8,17 @@ import {allowTranslations, patchWithCleanup} from "@web/../tests/web_test_helper
 
 const PASSWORD = "s3cr3t-test-pw";
 
-function setupAgent({failReconnects = 0, failCreation = false} = {}) {
+function setupAgent({
+    failReconnects = 0,
+    failStarts = 0,
+    failCreation = false,
+    rejectRegister = false,
+    deferReconnect = false,
+} = {}) {
     allowTranslations();
-    const calls = {register: 0, unregister: 0, stop: 0, reconnect: 0};
+    const calls = {register: 0, unregister: 0, stop: 0, reconnect: 0, start: 0};
+    const agents = [];
+    const deferred = [];
     class FakeUserAgent {
         static makeURI(uri) {
             return uri;
@@ -19,24 +27,47 @@ function setupAgent({failReconnects = 0, failCreation = false} = {}) {
             if (failCreation) {
                 throw new Error(`bad config: ${JSON.stringify(options)}`);
             }
+            this.options = options;
+            this.stops = 0;
+            this.reconnects = 0;
+            agents.push(this);
         }
         async start() {
-            return true;
-        }
-        async stop() {
-            calls.stop++;
-        }
-        async reconnect() {
-            calls.reconnect++;
-            if (calls.reconnect <= failReconnects) {
+            calls.start++;
+            if (calls.start <= failStarts) {
                 throw new Error("network down");
             }
         }
+        async stop() {
+            calls.stop++;
+            this.stops++;
+        }
+        reconnect() {
+            calls.reconnect++;
+            this.reconnects++;
+            if (deferReconnect) {
+                return new Promise((resolve, reject) =>
+                    deferred.push({resolve, reject})
+                );
+            }
+            if (calls.reconnect <= failReconnects) {
+                return Promise.reject(new Error("network down"));
+            }
+            return Promise.resolve();
+        }
     }
     class FakeRegisterer {
-        stateChange = {addListener: () => true};
+        listeners = [];
+        stateChange = {addListener: (listener) => this.listeners.push(listener)};
         register() {
             calls.register++;
+            if (rejectRegister) {
+                return Promise.reject(new Error("RequestPendingError"));
+            }
+            for (const listener of this.listeners) {
+                listener("Registered");
+            }
+            return Promise.resolve();
         }
         async unregister() {
             calls.unregister++;
@@ -46,6 +77,7 @@ function setupAgent({failReconnects = 0, failCreation = false} = {}) {
     window.SIP = {
         UserAgent: FakeUserAgent,
         Registerer: FakeRegisterer,
+        RegistererState: {Registered: "Registered"},
         version: "test",
     };
     after(() => {
@@ -82,7 +114,7 @@ function setupAgent({failReconnects = 0, failCreation = false} = {}) {
         }
     );
     after(() => agent.stop());
-    return {agent, calls, notifications, errors};
+    return {agent, agents, calls, deferred, notifications, errors};
 }
 
 test("reconnect delay grows and caps at 30s", () => {
@@ -144,4 +176,64 @@ test("re-registers on pageshow from bfcache", async () => {
     window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
     await animationFrame();
     expect(calls.register).toBe(registers + 1);
+});
+
+test("register rejection is handled and the status is not green", async () => {
+    const {agent, calls, errors} = setupAgent({rejectRegister: true});
+    await animationFrame();
+    expect(calls.register).toBe(1);
+    expect(errors.length).toBe(1);
+    expect(agent.voip.status).toBe("connecting");
+});
+
+test("stale agent is discarded on pageshow from bfcache", async () => {
+    const {agent, agents, calls} = setupAgent({failReconnects: 100});
+    await animationFrame();
+    agent._onDisconnect(new Error("connection lost"));
+    await animationFrame();
+    expect(agents[0].reconnects).toBe(1);
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+    await animationFrame();
+    expect(agents.length).toBe(2);
+    expect(agents[0].stops >= 1).toBe(true);
+    expect(agent.voip.status).toBe("connected");
+    await advanceTime(60000);
+    await animationFrame();
+    expect(agents[0].reconnects).toBe(1);
+    expect(agents[1].reconnects).toBe(0);
+    expect(calls.start).toBe(2);
+});
+
+test("keeps retrying when start fails", async () => {
+    const {agent, calls} = setupAgent({failStarts: 2});
+    await animationFrame();
+    expect(agent.voip.status).toBe("reconnecting");
+    await advanceTime(reconnectDelay(0));
+    await animationFrame();
+    expect(calls.start).toBe(2);
+    await advanceTime(reconnectDelay(1));
+    await animationFrame();
+    expect(calls.start).toBe(3);
+    expect(agent.voip.status).toBe("connected");
+});
+
+test("no timer is armed after stop", async () => {
+    const {agent, calls, deferred} = setupAgent({deferReconnect: true});
+    await animationFrame();
+    agent._onDisconnect(new Error("connection lost"));
+    await animationFrame();
+    expect(calls.reconnect).toBe(1);
+    agent.stop();
+    deferred[0].reject(new Error("network down"));
+    await animationFrame();
+    await advanceTime(60000);
+    await animationFrame();
+    expect(calls.reconnect).toBe(1);
+});
+
+test("configures the keep alive interval", async () => {
+    const {agents} = setupAgent();
+    await animationFrame();
+    expect(agents[0].options.transportOptions.keepAliveInterval).toBe(25);
 });

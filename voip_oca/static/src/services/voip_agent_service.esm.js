@@ -32,7 +32,7 @@ export class VoipAgent {
         this.reconnectTimer = null;
         this.generation = 0;
         this.stopped = false;
-        this.agentStarted = false;
+        this.resetRegistration();
         this._onPageHide = this.onPageHide.bind(this);
         this._onPageShow = this.onPageShow.bind(this);
         this.store = services["mail.store"];
@@ -47,8 +47,9 @@ export class VoipAgent {
         );
     }
     get agentConfig() {
-        // The agent built with this config will own the next generation
-        const generation = this.generation + 1;
+        return this.buildAgentConfig(this.generation);
+    }
+    buildAgentConfig(generation) {
         return {
             authorizationPassword: this.voip.pbx_password,
             authorizationUsername: this.voip.pbx_username,
@@ -81,11 +82,23 @@ export class VoipAgent {
     async loadSipLibrary() {
         await loadBundle("voip_oca.agent_assets");
     }
+    /* State of the registration cycle of the current agent */
+    resetRegistration() {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.ensuring = false;
+        this.startCalled = false;
+        this.authRejected = false;
+        this.attempt = 0;
+    }
     async connectAgent() {
         if (this.voip.mode !== "prod") {
             console.info("Voip agent is not available in non-production mode");
             return;
         }
+        // Every await below is followed by a check of this generation
+        const generation = ++this.generation;
+        this.resetRegistration();
         this.voip.status = "connecting";
         if (!this.hasRtcSupport) {
             console.info("Voip agent is not available in this browser");
@@ -102,6 +115,9 @@ export class VoipAgent {
         try {
             await this.loadSipLibrary();
         } catch (error) {
+            if (this._isStale(generation)) {
+                return;
+            }
             const message = this.redact(error.message);
             console.error(message);
             this.notification.add(
@@ -111,9 +127,12 @@ export class VoipAgent {
             );
             return;
         }
+        if (this._isStale(generation)) {
+            return;
+        }
         let agent = null;
         try {
-            agent = new SIP.UserAgent(this.agentConfig);
+            agent = new SIP.UserAgent(this.buildAgentConfig(generation));
         } catch (error) {
             const message = this.redact(error.message);
             console.error(message);
@@ -128,9 +147,7 @@ export class VoipAgent {
             );
             return;
         }
-        const generation = ++this.generation;
         this.agent = agent;
-        this.agentStarted = false;
         this.registerer = new SIP.Registerer(agent);
         this.registerer.stateChange.addListener((state) =>
             this._onRegistererStateChange(state, generation)
@@ -138,69 +155,89 @@ export class VoipAgent {
         // Same function references: adding them again never duplicates them
         window.addEventListener("pagehide", this._onPageHide);
         window.addEventListener("pageshow", this._onPageShow);
-        await this.reconnectAgent(0, generation);
+        await this.ensureRegistered(generation);
     }
-    /* Starts (or reconnects) the agent and registers. Never gives up. */
-    async reconnectAgent(attempt = 0, generation = this.generation) {
-        if (
-            this.stopped ||
-            generation !== this.generation ||
-            this.reconnectingAgent ||
-            this.reconnectTimer
-        ) {
+    _isStale(generation) {
+        return this.stopped || generation !== this.generation;
+    }
+    /*
+        The only place that (re)establishes the line. It looks at the REAL state:
+        reconnects the transport if it is down (start() only if the agent never
+        started: a second start() does not connect), then sends a REGISTER.
+        Any failure schedules a new attempt, so it never gives up.
+    */
+    async ensureRegistered(generation) {
+        if (this._isStale(generation) || this.ensuring || this.authRejected) {
             return;
         }
         const agent = this.agent;
         const registerer = this.registerer;
-        this.reconnectingAgent = true;
-        this.voip.status = this.agentStarted ? "reconnecting" : "connecting";
+        if (
+            agent.isConnected() &&
+            registerer.state === SIP.RegistererState.Registered
+        ) {
+            return;
+        }
+        this.ensuring = true;
         try {
-            if (this.agentStarted) {
-                await agent.reconnect();
-            } else {
-                await agent.start();
-                this.agentStarted = true;
+            if (!agent.isConnected()) {
+                if (this.startCalled) {
+                    await agent.reconnect();
+                } else {
+                    this.startCalled = true;
+                    await agent.start();
+                }
+                if (this._isStale(generation)) {
+                    return;
+                }
             }
-            if (generation !== this.generation) {
-                return;
-            }
-            this._register(registerer, generation);
+            // Rejects with RequestPendingError if a REGISTER is still pending
+            await registerer.register({
+                requestDelegate: {
+                    onAccept: () => this._onRegistered(generation),
+                    onReject: (response) =>
+                        this._onRegistererRejected(response, generation),
+                },
+            });
         } catch (error) {
-            if (generation !== this.generation || this.stopped) {
+            if (this._isStale(generation)) {
                 return;
             }
             console.error(this.redact(error?.message));
-            this.voip.status = "reconnecting";
-            this.reconnectTimer = setTimeout(() => {
-                this.reconnectTimer = null;
-                this.reconnectAgent(attempt + 1, generation);
-            }, reconnectDelay(attempt));
+            this._scheduleRetry(generation);
         } finally {
             if (generation === this.generation) {
-                this.reconnectingAgent = false;
+                this.ensuring = false;
             }
         }
     }
-    _register(registerer, generation) {
-        // Register() rejects (e.g. RequestPendingError) if a REGISTER is pending
-        this._ignoreResult(() =>
-            registerer.register({
-                requestDelegate: {
-                    onAccept: () => this._onRegistered(generation),
-                    onReject: this._onRegistererRejected.bind(this),
-                },
-            })
-        );
+    _scheduleRetry(generation) {
+        if (this._isStale(generation) || this.authRejected || this.reconnectTimer) {
+            return;
+        }
+        this.voip.status = "reconnecting";
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.ensureRegistered(generation);
+        }, reconnectDelay(this.attempt++));
     }
     _onRegistered(generation) {
-        if (generation === this.generation && !this.stopped) {
-            this.voip.status = "connected";
+        if (this._isStale(generation)) {
+            return;
         }
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.attempt = 0;
+        this.voip.status = "connected";
     }
     /* Releases the registration when the page is closed (fire and forget) */
     onPageHide() {
-        this._ignoreResult(() => this.registerer?.unregister());
-        this._ignoreResult(() => this.agent?.stop());
+        const {agent, registerer} = this;
+        // The old agent must not react to anything from now on
+        this.generation++;
+        this.resetRegistration();
+        this._ignoreResult(() => registerer?.unregister());
+        this._ignoreResult(() => agent?.stop());
     }
     /* The page came back from the back-forward cache: the agent was stopped */
     onPageShow(event) {
@@ -210,12 +247,12 @@ export class VoipAgent {
         // Discard everything that belongs to the old agent
         const oldAgent = this.agent;
         this.generation++;
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-        this.reconnectingAgent = false;
-        this.agentStarted = false;
+        this.resetRegistration();
         this.session = false;
         this.voip.inCall = false;
+        this.stopTone();
+        this.callAudio.srcObject = null;
+        this.callAudio.pause();
         this._ignoreResult(() => oldAgent?.stop());
         this.connectAgent();
     }
@@ -232,8 +269,7 @@ export class VoipAgent {
         this.stopped = true;
         window.removeEventListener("pagehide", this._onPageHide);
         window.removeEventListener("pageshow", this._onPageShow);
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
+        this.resetRegistration();
     }
     playTone(tone) {
         this.toneAudio.currentTime = 0;
@@ -274,19 +310,21 @@ export class VoipAgent {
         this.isHolded = false;
     }
     _onDisconnect(error, generation = this.generation) {
-        if (!error || this.stopped || generation !== this.generation) {
+        // Fired only when the transport leaves "Connected"
+        if (this._isStale(generation)) {
             return;
         }
-        const message = this.redact(error.message);
-        console.error(message);
-        this.notification.add(
-            _t("An error occurred during the connection:\n\n%(error)s", {
-                error: message,
-            })
-        );
-
+        if (error) {
+            const message = this.redact(error.message);
+            console.error(message);
+            this.notification.add(
+                _t("An error occurred during the connection:\n\n%(error)s", {
+                    error: message,
+                })
+            );
+        }
         this.voip.status = "reconnecting";
-        this.reconnectAgent(0, generation);
+        this.ensureRegistered(generation);
     }
     _onSessionStateChange(newState) {
         switch (newState) {
@@ -488,23 +526,41 @@ export class VoipAgent {
         this.voip.acceptCall();
     }
     /* Registerer functions */
-    async _onRegistererRejected(response) {
-        this.notification.add(
-            _t(
-                "An error occurred during the registration of the User Agent:\n\n%(error)s",
-                {
-                    error: response.message.reasonPhrase,
-                }
-            )
-        );
+    _onRegistererRejected(response, generation) {
+        if (this._isStale(generation)) {
+            return;
+        }
+        const status = response?.message?.statusCode;
+        if (status === 401 || status === 403) {
+            // Wrong extension or password: retrying would only lock the account
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+            this.authRejected = true;
+            this.voip.status = "disconnected";
+            this.notification.add(
+                _t(
+                    "Extension or password refused by the PBX. Contact the administrator."
+                ),
+                {sticky: true, type: "danger"}
+            );
+            return;
+        }
+        // 408, 5xx (including the internal 503 of a dead transport), others
+        console.error(`REGISTER rejected with status ${status}`);
+        this._scheduleRetry(generation);
     }
     _onRegistererStateChange(state, generation) {
-        if (generation !== this.generation) {
+        if (this._isStale(generation)) {
             return;
         }
         this.registererState = state;
         if (state === SIP.RegistererState.Registered) {
             this._onRegistered(generation);
+        } else if (state === SIP.RegistererState.Unregistered) {
+            // Lost registration (refused renewal, expiry, rejection). A 401/403
+            // arrives right after this and cancels the retry.
+            this.voip.status = "reconnecting";
+            this._scheduleRetry(generation);
         }
     }
 }

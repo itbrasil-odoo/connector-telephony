@@ -4,9 +4,9 @@
 */
 import {click, start, startServer} from "@mail/../tests/mail_test_helpers";
 import {expect, test} from "@odoo/hoot";
+import {onRpc, patchWithCleanup} from "@web/../tests/web_test_helpers";
 import {animationFrame} from "@odoo/hoot-dom";
 import {defineVoipModels} from "../voip_test_helpers.esm";
-import {patchWithCleanup} from "@web/../tests/web_test_helpers";
 import {session} from "@web/session";
 
 // As we use mail as a dependancy, we need to declare models.
@@ -65,4 +65,36 @@ test("Check Call Tab", async () => {
     expect(".o_voip_softphone .o_voip_partner_header").toHaveCount(1);
     expect(".o_voip_softphone .o_voip_partner_actions").toHaveCount(1);
     expect(".o_voip_softphone .o_voip_partner_activity").toHaveCount(0);
+});
+
+test("A call without contact opens with its number", async () => {
+    const pyEnv = await startServer();
+    pyEnv["voip.call"].create({
+        name: "Unknown number",
+        phone_number: "555 555",
+        state: "terminated",
+        pbx_id: 1,
+        user_id: pyEnv.user.id,
+        start_date: "2016-12-11 05:15:00",
+        end_date: "2016-12-11 05:30:00",
+        create_date: "2016-12-11 05:15:00",
+    });
+    patchWithCleanup(session, {
+        ...session,
+        voip: {pbx_id: 1},
+    });
+    onRpc("res.partner", "format_partner", ({args}) => {
+        expect.step(`format_partner ${JSON.stringify(args[0])}`);
+    });
+    await start();
+    click(".o_menu_systray .o_nav_entry[title='Softphone']");
+    await animationFrame();
+    click(".o_voip_softphone li a[name='call_list']");
+    await animationFrame();
+    click(".o_voip_softphone .o_voip_call_item");
+    await animationFrame();
+    expect.verifySteps([]);
+    expect(".o_voip_softphone .o_voip_partner_header").toHaveText(/No contact info/);
+    expect(".o_voip_softphone .o_voip_partner_header").toHaveText(/555 555/);
+    expect(".o_voip_softphone button[title='New contact']").toHaveCount(1);
 });

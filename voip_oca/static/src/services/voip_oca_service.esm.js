@@ -62,9 +62,11 @@ export class VoipOCA {
         }
         this.activity = activity || {};
         this.call = call || {};
-        this.partner = await this.orm.call("res.partner", "format_partner", [
-            [partner_id],
-        ]);
+        // A call or activity without contact (unknown number) opens with an empty
+        // contact: the panel shows the number and offers a new contact.
+        this.partner = partner_id
+            ? await this.orm.call("res.partner", "format_partner", [[partner_id]])
+            : {};
     }
     async acceptCall() {
         this.call.update(

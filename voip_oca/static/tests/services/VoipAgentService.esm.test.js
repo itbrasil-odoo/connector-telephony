@@ -177,10 +177,29 @@ function setupAgent({
             this.transition("Unregistered");
         }
     }
+    const inviters = [];
+    class FakeInviter {
+        listeners = [];
+        stateChange = {addListener: (listener) => this.listeners.push(listener)};
+        sessionDescriptionHandler = {
+            remoteMediaStream: {},
+            peerConnection: {getReceivers: () => []},
+        };
+        constructor(agent, target, options) {
+            this.target = target;
+            this.options = options || {};
+            inviters.push(this);
+        }
+        invite(options = {}) {
+            this.requestDelegate = options.requestDelegate || {};
+            return Promise.resolve();
+        }
+    }
     const previous = window.SIP;
     window.SIP = {
         UserAgent: FakeUserAgent,
         Registerer: FakeRegisterer,
+        Inviter: FakeInviter,
         RegistererState: {
             Initial: "Initial",
             Registered: "Registered",
@@ -218,7 +237,7 @@ function setupAgent({
                 status: "disconnected",
             },
             multi_tab: {},
-            orm: {},
+            orm: {call: async () => ({id: 1})},
             notification: {
                 add: (message, options) => {
                     notifications.push(String(message));
@@ -227,11 +246,21 @@ function setupAgent({
                     }
                 },
             },
-            "mail.store": {},
+            "mail.store": {"voip.call": {insert: (call) => call}},
         }
     );
     after(() => agent.stop());
-    return {agent, agents, registerers, calls, net, notifications, errors, sticky};
+    return {
+        agent,
+        agents,
+        registerers,
+        inviters,
+        calls,
+        net,
+        notifications,
+        errors,
+        sticky,
+    };
 }
 
 test("reconnect delay grows and caps at 30s", () => {
@@ -482,4 +511,54 @@ test("two pageshow in a row leave a single active agent", async () => {
     await animationFrame();
     expect(calls.reconnect).toBe(1);
     expect(agent.voip.status).toBe("connected");
+});
+
+function spyAudio(agent) {
+    const audio = {tones: [], stops: 0, remote: 0};
+    patchWithCleanup(agent, {
+        playTone(tone) {
+            audio.tones.push(tone);
+        },
+        stopTone() {
+            audio.stops++;
+        },
+        setCallAudio() {
+            audio.remote++;
+        },
+    });
+    return audio;
+}
+
+test("an outgoing call rings back and asks for early media", async () => {
+    const {agent, inviters} = setupAgent();
+    const audio = spyAudio(agent);
+    await agent.call({number: "947121791"});
+    // The ringback tone, not the dial tone of a phone off the hook
+    expect(audio.tones).toEqual(["ringbacktone"]);
+    expect(inviters).toHaveLength(1);
+    // The answer of a 183 starts the media (and its ICE) before the 200
+    expect(inviters[0].options.earlyMedia).toBe(true);
+});
+
+test("early media replaces the ringback with the audio of the network", async () => {
+    const {agent, inviters} = setupAgent();
+    const audio = spyAudio(agent);
+    await agent.call({number: "947121791"});
+    const inviter = inviters[0];
+    inviter.requestDelegate.onProgress({message: {statusCode: 183, body: "v=0"}});
+    expect(audio.stops).toBe(1);
+    expect(audio.remote).toBe(1);
+    // A track added later (the network sends its audio) is played too
+    expect(typeof inviter.sessionDescriptionHandler.remoteMediaStream.onaddtrack).toBe(
+        "function"
+    );
+});
+
+test("a ringing without session description keeps the ringback", async () => {
+    const {agent, inviters} = setupAgent();
+    const audio = spyAudio(agent);
+    await agent.call({number: "947121791"});
+    inviters[0].requestDelegate.onProgress({message: {statusCode: 180, body: ""}});
+    expect(audio.stops).toBe(0);
+    expect(audio.remote).toBe(0);
 });

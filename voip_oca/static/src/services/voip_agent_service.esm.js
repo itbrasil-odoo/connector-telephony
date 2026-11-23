@@ -421,7 +421,8 @@ export class VoipAgent {
         if (!number && partner) {
             phone_number = partner.phone;
         }
-        this.playTone("dialtone");
+        // The callee is being called: the ringback tone, not the dial tone
+        this.playTone("ringbacktone");
         await this.createCall({
             partner_id: partner && partner.id,
             phone_number: phone_number,
@@ -433,7 +434,14 @@ export class VoipAgent {
             const destination_number = SIP.UserAgent.makeURI(
                 `sip:${phone_number.replace(/\D/g, "")}@${this.voip.pbx_domain}`
             );
-            this.session = new SIP.Inviter(this.agent, destination_number);
+            // Early media: the answer of a 183 starts the media at once. The
+            // network audio (its ringback, "number not in service") is heard,
+            // and the ICE of the browser starts with the one of the PBX: when
+            // it waited for the 200, a callee answering after the ICE of the
+            // PBX gave up (some seconds) behind a symmetric NAT got no audio.
+            this.session = new SIP.Inviter(this.agent, destination_number, {
+                earlyMedia: true,
+            });
             this.session.delegate = {
                 onBye: this._onHanghup.bind(this),
             };
@@ -444,6 +452,7 @@ export class VoipAgent {
                 .invite({
                     requestDelegate: {
                         onAccept: this._onInviteAccepted.bind(this),
+                        onProgress: this._onInviteProgress.bind(this),
                         onReject: this._onInviteRejected.bind(this),
                     },
                 })
@@ -474,6 +483,17 @@ export class VoipAgent {
     _onTransferAccepted() {
         this.session.bye();
         this._onHanghup();
+    }
+    _onInviteProgress(response) {
+        // Only a provisional response with a session description brings audio
+        // (a 183); a plain 180 keeps the local ringback.
+        const handler = this.session?.sessionDescriptionHandler;
+        if (!response.message.body || !handler) {
+            return;
+        }
+        this.stopTone();
+        this.setCallAudio();
+        handler.remoteMediaStream.onaddtrack = this.setCallAudio.bind(this);
     }
     _onInviteAccepted() {
         if (!this.session) {
